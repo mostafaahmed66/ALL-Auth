@@ -2,124 +2,59 @@
 
 namespace App\Http\Controllers;
 
+use Carbon\Carbon;
 use App\Models\Otp;
 use App\Models\User;
 use Illuminate\Http\Request;
+use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Cache;
-use Carbon\Carbon;
+use App\Application\Auth\UseCases\LoginUser;
+use App\Application\Auth\UseCases\VerifyOtp;
+use App\Application\Auth\UseCases\RegisterUser;
 
 class AuthController extends Controller
 {
     // ========================= Register + OTP =========================
-    public function register(Request $request)
-    {
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'phone' => 'required|unique:users,phone',
-            'email' => 'nullable|email|unique:users,email',
-            'password' => 'required|min:6',
-        ]);
+   public function register(Request $request, RegisterUser $useCase)
+{
+    $request->validate([
+        'name' => 'required',
+        'phone' => 'required|unique:users,phone',
+        'password' => 'required|min:6',
+    ]);
 
-        $user = User::create([
-            'name' => $request->name,
-            'phone' => $request->phone,
-            'email' => $request->email,
-            'password' => bcrypt($request->password),
-        ]);
+    $result = $useCase->execute($request->all());
 
-        // generate OTP
-        $otpCode = rand(100000, 999999);
-
-        Otp::create([
-            'user_id' => $user->id,
-            'code' => bcrypt($otpCode),
-            'expires_at' => now()->addMinutes(5),
-        ]);
-
-        // TODO: send SMS here
-        // SMS::send($user->phone, $otpCode);
-
-        return response()->json([
-            'message' => 'OTP sent to your phone',
-            'otp_for_testing' => $otpCode // امسحها في production
-        ]);
-
-
-    }
+   return $result;
+}
 
     // ========================= Verify OTP =========================
-    public function verifyOtp(Request $request)
+    public function verifyOtp(Request $request , VerifyOtp $useCase)
     {
         $request->validate([
             'phone' => 'required',
             'otp' => 'required'
         ]);
 
-        $user = User::where('phone', $request->phone)->first();
-        if (! $user) {
-            return response()->json(['message' => 'User not found'], 404);
-        }
 
-        $otp = Otp::where('user_id', $user->id)->latest()->first();
-        if (! $otp) {
-            return response()->json(['message' => 'OTP not found'], 404);
-        }
+         $user=$useCase->execute($request->all());
 
-        if (Carbon::parse($otp->expires_at)->isPast()) {
-            return response()->json(['message' => 'OTP expired'], 422);
-        }
+        return  $user;
 
-        if (! Hash::check($request->otp, $otp->code)) {
-            return response()->json(['message' => 'Invalid OTP'], 422);
-        }
-
-        // verify phone
-        $user->phone_verified_at = now();
-        $user->save();
-
-        // delete otp
-        $otp->delete();
-
-        // generate token
-        $token = auth()->login($user);
-
-        return response()->json([
-            'message' => 'Phone verified successfully',
-            'access_token' => $token,
-            'token_type' => 'Bearer',
-            'user' => $user
-        ]);
     }
 
-
-
     // ========================= Login =========================
-    public function login(Request $request)
+    public function login(Request $request , LoginUser $useCase)
     {
-        $credentials = $request->validate([
+        $request->validate([
             'phone' => 'required',
             'password' => 'required',
         ]);
 
-        $user = User::where('phone', $credentials['phone'])->first();
-        if (! $user) {
-            return response()->json(['message' => 'Invalid phone or password'], 401);
-        }
+       $done= $useCase->execute($request->all());
 
-        if (! $user->phone_verified_at) {
-            return response()->json(['message' => 'Phone number not verified'], 403);
-        }
-
-        if (! $token = auth()->attempt($credentials)) {
-            return response()->json(['message' => 'Invalid phone or password'], 401);
-        }
-
-        return response()->json([
-            'access_token' => $token,
-            'token_type' => 'Bearer',
-            'user' => auth()->user(),
-        ]);
+       return $done;
     }
 
     // ========================= Resend OTP + Rate Limit =========================
